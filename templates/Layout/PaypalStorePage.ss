@@ -1,4 +1,3 @@
-<div id="page_type" class="internal typography">
     <h1>$Title</h1>
     $Content
 	<% if PaypalStoreItems %>
@@ -44,6 +43,3 @@
 		<% end_loop %>
 		</ul><!--paypal_items-->
 	<% end_if %>
-</div>
-
-  

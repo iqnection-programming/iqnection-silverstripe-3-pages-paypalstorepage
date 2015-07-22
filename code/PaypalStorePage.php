@@ -1,5 +1,4 @@
 <?
-	define("TEST_MODE", true);
 	
 	class PaypalItemOption extends DataObject
 	{
@@ -24,14 +23,23 @@
         {
 			$fields = new FieldList();
 
-			$fields->push( new HeaderField('parentName','Parent Item: '.$this->PaypalStoreItem()->ItemID) );
 			$fields->push( new TextField("ItemID", "Item / Invoice Number") );
 			$fields->push( new TextField("Name", "Item Name") );
 			$fields->push( new CurrencyField("Price", "Price") );
 			
+			$this->extend('updateCMSFields',$fields);
+			
 			return $fields;
         }
  
+		public function validate()
+		{
+			$result = parent::validate();
+			$extra = ($this->ID) ? " AND ID <> ".$this->ID : null;
+			if (DataObject::get_one('PaypalStoreItem',"ItemID = '".$this->ItemID."'")) $result->error('Item Number must be unique');
+			if (DataObject::get_one('PaypalItemOption',"ItemID = '".$this->ItemID."'".$extra)) $result->error('Item Number must be unique');
+			return $result;
+		}
 		
 		public function FormID()
 		{
@@ -77,6 +85,7 @@
 		private static $db = array( 
 			"Amount" => "Currency",
 			"TransactionID" => "Varchar(255)",
+			"GatewayResponse" => "Text",
 			"Date" => "SS_Datetime",
 			"Status" => "Varchar(255)",
 			"ItemID" => "Varchar(255)",
@@ -94,6 +103,16 @@
 		private static $has_one = array(
 			"PaypalStorePage" => "PaypalStorePage"
 		); 		
+		
+		private static $summary_fields = array(
+			'Date.NiceUS' => 'Date',
+			'Name' => 'Name',
+			'ItemID' => 'Item ID',
+			'ItemName' => 'Item Name',
+			'Amount' => 'Price'
+		);
+		
+		private static $default_sort = 'Date DESC';
 		
         public function getCMSFields()
         {
@@ -113,13 +132,30 @@
 			$fields->push( new TextField("Zip", "Payer Zip Code") );
 			$fields->push( new TextField("Email", "Payer Paypal Email") );
 			$fields->push( new TextField("PayerID", "Paypal Payer ID") );
+			if (Permission::check('ADMIN'))
+			{
+				$fields->push( new TextareaField('GatewayResponse','Gateway Response') );
+			}
 
+			$this->extend('updateCMSFields',$fields);
+			
 			return $fields;
         }
 		
-		public function canCreate($member = null) { return false; }
+		function onBeforeWrite()
+		{
+			parent::onBeforeWrite();			
+		}
+		
+		function OnSuccessfulPayment()
+		{
+			$this->extend('AfterSuccessfulPayment');
+		}
+		
+		public function canCreate($member = null) { return (Permission::check('ADMIN')); }
 		public function canDelete($member = null) { return true; }
-		public function canEdit($member = null) { return false; }
+		public function canEdit($member = null)   { return (Permission::check('ADMIN')); }
+		public function canView($member = null)   { return true; }
 	}
 
 	class PaypalStoreItem extends DataObject
@@ -166,8 +202,19 @@
 			);
 			$fields->push( new GridField('PaypalItemOptions','Paypal Item Options',$this->PaypalItemOptions(),$PaypalItemOptions_config));
 			
+			$this->extend('updateCMSFields',$fields);
+			
 			return $fields;
         }
+		
+		public function validate()
+		{
+			$result = parent::validate();
+			$extra = ($this->ID) ? " AND ID <> ".$this->ID : null;
+			if (DataObject::get_one('PaypalStoreItem',"ItemID = '".$this->ItemID."'".$extra)) $result->error('Item Number must be unique');
+			if (DataObject::get_one('PaypalItemOption',"ItemID = '".$this->ItemID."'")) $result->error('Item Number must be unique');
+			return $result;
+		}
 		
 		public function GetItemImage()
 		{
@@ -187,6 +234,8 @@
 				}
 			}
 			
+			$this->extend('updateItemImagePath',$image_src);
+			
 			if ( $image_src && $image_src != "assets/")
 			{
 				$output .= "<img src=\"".$image_src."\" alt=\"".$this->Name."\" />";
@@ -195,14 +244,25 @@
 			return $output;
 		}		
 		
+		function FindPrice()
+		{
+			return ($this->PaypalItemOptions()->Count()) ? $this->PaypalItemOptions()->First()->Price : $this->Price;
+		}
+		
+		function FindItemID()
+		{
+			return ($this->PaypalItemOptions()->Count()) ? $this->PaypalItemOptions()->First()->ItemID : $this->ItemID;
+		}
+		
 		public function canCreate($member = null) { return true; }
 		public function canDelete($member = null) { return true; }
-		public function canEdit($member = null) { return true; }
+		public function canEdit($member = null)   { return true; }
+		public function canView($member = null)   { return true; }
 	}
 
 	class PaypalStorePage extends Page
 	{
-		static $icon = "iq-audiogallerypage/images/icon-paypalstorepage";
+		static $icon = "iq-paypalstorepage/images/icon-paypalstorepage";
 		
 		private static $db = array(
 			"PayPalUsername" => 'Varchar(255)',
@@ -218,91 +278,40 @@
 		{
 			$fields = parent::getCMSFields();
 			 
-			$fields->addFieldToTab('Root.Content.Main', new TextField('PayPalUsername','PayPal Username'),'Content' );
+			$fields->addFieldToTab('Root.Main', new TextField('PayPalUsername','PayPal Username'),'Content' );
 			
-			$PaypalStoreItems_config = GridFieldConfig::create()->addComponents(				
-				new GridFieldSortableRows('SortOrder'),
-				new GridFieldToolbarHeader(),
-				new GridFieldAddNewButton('toolbar-header-right'),
-				new GridFieldSortableHeader(),
-				new GridFieldDataColumns(),
-				new GridFieldPaginator(10),
-				new GridFieldEditButton(),
-				new GridFieldDeleteAction(),
-				new GridFieldDetailForm()				
-			);
-			$fields->addFieldToTab("Root.Content.Items", new GridField('PaypalItemOptions','Paypal Item Options',$this->PaypalStoreItems(),$PaypalStoreItems_config)); 
-			$fields->addFieldToTab("Root.Content.Main", new HTMLEditorField("ThankYouText", "Text on Submission")); 
+			// Paypal Items
+			$fields->addFieldToTab('Root.Items', new GridField(
+				'PaypalStoreItems',
+				'Paypal Items',
+				$this->PaypalStoreItems(),
+				GridFieldConfig_RecordEditor::create()->addComponent(
+				new GridFieldSortableRows('SortOrder')	,
+					'GridFieldButtonRow'
+				)
+			));
+			
+			// Paypal Payments
+			$fields->addFieldToTab('Root.Payments', new GridField(
+				'PaypalPayments',
+				'Paypal Payments',
+				$this->PaypalPayments(),
+				GridFieldConfig_RecordEditor::create()->addComponent(
+					'GridFieldButtonRow'
+				)
+			));
+			
+			$fields->addFieldToTab("Root.Main", new HTMLEditorField("ThankYouText", "Text on Submission")); 
 
+			$this->extend('updateCMSFields',$fields);
+			
 			return $fields;
 		}
-		
-		/* Out dated and possibly not used
-		private function createPaymentManager()
+				
+		public function IPNLink()
 		{
-			$tf = new HasManyComplexTableField(
-				$this,
-				"PaypalPayments",
-				"PaypalPayment",
-				array(
-					"Amount" => "Transaction Amount",
-					"Date" => "Transaction Date",
-					"ItemID" => "Item ID",
-					"ItemName" => "Item Name",
-					"Name" => "Payer Name",
-					"Email" => "Payer Paypal Email"
-				),
-				"getCMSFields_forPopup"
-			);
-			
-			// disables multi-select functionality (kinda redundant for this page)
-			$tf->Markable = false;
-			
-			// use a custom query to display newest submissions first
-			$instance = singleton("PaypalPayment");
-			$query = $instance->buildSQL("", "PaypalPayment.Date DESC", null, "");			
-			$tf->setCustomQuery($query); 			
-			
-			// pretty up the date field
-			$tf->setFieldCasting(array(
-				"Date" => "SS_Datetime->Nice"
-			));
-
-			// pagination
-			$tf->setShowPagination(true);
-			$tf->setPageSize(20);
-			
-			// use the complete data set for the CSV export
-			$tf->setFieldListCsv(array(
-				"Amount" => "Transaction Amount",
-				"TransactionID" => "Transaction ID",
-				"Date" => "Transaction Date",
-				"ItemID" => "Item ID",
-				"ItemName" => "Item Name",
-				"Name" => "Payer Name",
-				"Street" => "Payer Address",
-				"City" => "Payer City",
-				"State" => "Payer State",
-				"Country" => "Payer Country",
-				"Zip" => "Payer Zip Code",
-				"Email" => "Payer Paypal Email",
-				"PayerID" => "Paypal Payer ID"
-			));			
-			
-			// don't allow adding. first in list is the default click action.
-			$tf->setPermissions(array(
-				"show",
-				"export",
-				"delete"
-			));
-			
-			return $tf;
-		}*/
-		
-		/*public function IPNLink()
-		{
-			return $this->BaseHref()."paypal.notify.php";
-		}*/
+			return $this->AbsoluteLink('process_ipn_response');
+		}
 		
 		public function PaypalUrl()
 		{
@@ -318,6 +327,10 @@
 
 	class PaypalStorePage_Controller extends Page_Controller
 	{
+		static $allowed_actions = array(
+			'process_ipn_response'
+		);
+			
 		public function init()
 		{
 			parent::init();
@@ -332,13 +345,9 @@
 				foreach($PaypalStoreItems as $PaypalStoreItem)
 				{
 					if ( ($ProductOptions = $PaypalStoreItem->PaypalItemOptions()) && ($ProductOptions->Count()) )
-					{
-						$JS .= '
-							$("#'.$ProductOptions->First()->OptionID().'").attr("checked", "checked");
-							$("#showprice_'.$ProductOptions->First()->FormID().'").html("$ '.$ProductOptions->First()->Get_Price().'");
-							$("#num_'.$ProductOptions->First()->FormID().'").val("'.$ProductOptions->First()->Get_ItemID().'");
-							$("#price_'.$ProductOptions->First()->FormID().'").val("'.$ProductOptions->First()->Get_Price().'");';
-						
+					{	
+						$JS .= '$("#'.$ProductOptions->First()->OptionID().'").attr("checked", "checked");';
+							
 						foreach($ProductOptions as $ProductOption)
 						{
 							$JS .= '
@@ -352,8 +361,91 @@
 				}
 				$JS .= '});';
 			}
+			$this->extend('updateCustomJS',$JS);
 			return $JS;
 		}
 		
+		function process_ipn_response($request=null)
+		{
+			if (!defined('PAYPAL_DEBUG_MODE')) define("PAYPAL_DEBUG_MODE", false);	
+		
+			// this prevents some kind of error in the core
+			$_SESSION = null;
+			
+			if( DEBUG_MODE ) SS_Log::add_writer(new SS_LogFileWriter(__DIR__."/log/paypal.transactions.txt"), SS_Log::WARN, '>');
+			if( DEBUG_MODE ) SS_Log::log("IPN Started!",SS_Log::DEBUG);
+		
+			
+			// parse post variables, reformat the data to be sent back via socket
+			$data = "cmd=_notify-validate";
+			foreach( $_POST as $key => $value )
+			{
+				$value = urlencode(stripslashes($value));
+				$data .= "&".$key."=".$value;
+			}
+			
+			// post back to PayPal system to validate
+			$header =  "POST /cgi-bin/webscr HTTP/1.1\r\n";
+			$header .= "Content-Type: application/x-www-form-urlencoded\r\n";
+			$header .= "Host: www.paypal.com\r\n"; 
+			$header .= "Connection: close\r\n";
+			$header .= "Content-Length: ".strlen($data)."\r\n\r\n";
+		
+			$response = "NONE";
+		
+			// send back the info
+			$socket_handle = fsockopen( /*PAYPAL_TEST_MODE ? "ssl://www.sandbox.paypal.com" :*/ "ssl://www.paypal.com", 443, $errno, $errstr, 30 );
+			if( DEBUG_MODE ) SS_Log::log("header_debug:\n".print_r($header, true)."\n\n",SS_Log::DEBUG);
+			if( DEBUG_MODE ) SS_Log::log("data_debug:\n".print_r($data, true)."\n\n",SS_Log::DEBUG);
+			if( $socket_handle )
+			{
+				fputs( $socket_handle, $header.$data );
+				while( !feof($socket_handle) )
+				{
+					$response = fgets($socket_handle, 1024);
+					$response = trim($response);	
+					if( DEBUG_MODE ) SS_Log::log("response_debug:\n".print_r($response, true)."\n\n",SS_Log::DEBUG);
+					if( strcmp($response, "VERIFIED") == 0 )
+					{
+						$response = "VERIFIED";
+					}
+					else if( strcmp($response, "INVALID") == 0 )
+					{
+						$response = "INVALID";
+					}
+				}
+				fclose($socket_handle);
+			}
+			
+			if( DEBUG_MODE ) SS_Log::log("paypal response: ".$response,SS_Log::DEBUG);
+			if( DEBUG_MODE ) SS_Log::log(print_r($_POST,true),SS_Log::DEBUG);
+			
+			if( $response == "INVALID" )	// we only care about completed interactions
+				exit(0);
+			
+			// SUCCESS - Do something with the data		
+			$Payment = new PaypalPayment();
+			$Payment->PaypalStorePageID = $this->ID;
+			$Payment->Date = SS_Datetime::now();
+			$Payment->TransactionID = isset($_POST['txn_id']) ? $_POST['txn_id'] : $_POST['ipn_track_id'];
+			$Payment->GatewayResponse = implode("\n",$_POST);
+			$Payment->Amount = isset($_POST['amount3']) ? $_POST['amount3'] : (isset($_POST['payment_gross']) ? $_POST['payment_gross'] : (isset($_POST['mc_gross']) ? $_POST['mc_gross'] : 0) );
+			$Payment->ItemID = isset($_POST['item_number']) ? $_POST['item_number'] : null;
+			$Payment->ItemName = isset($_POST['item_name']) ? $_POST['item_name'] : null;
+			$Payment->Email = isset($_POST['payer_email']) ? $_POST['payer_email'] : null;
+			$Payment->Status = isset($_POST['payment_status']) ? $_POST['payment_status'] : null;
+			$Payment->Name = (isset($_POST['first_name']) ? $_POST['first_name'] : null).' '.(isset($_POST['last_name']) ? $_POST['last_name'] : null);
+			$Payment->Street = isset($_POST['address_street']) ? $_POST['address_street'] : null;
+			$Payment->City = isset($_POST['address_city']) ? $_POST['address_city'] : null;
+			$Payment->State = isset($_POST['address_state']) ? $_POST['address_state'] : null;
+			$Payment->Country = isset($_POST['address_country']) ? $_POST['address_country'] : null;
+			$Payment->Zip = isset($_POST['address_zip']) ? $_POST['address_zip'] : null;
+			$Payment->PayerID = isset($_POST['payer_id']) ? $_POST['payer_id'] : null;
+			$Payment->write();
+			$Payment->OnSuccessfulPayment();
+			return $Payment;
+
+
+		}
 	}	
 ?>
