@@ -296,9 +296,7 @@
 				'PaypalPayments',
 				'Paypal Payments',
 				$this->PaypalPayments(),
-				GridFieldConfig_RecordEditor::create()->addComponent(
-					'GridFieldButtonRow'
-				)
+				GridFieldConfig_RecordEditor::create()
 			));
 			
 			$fields->addFieldToTab("Root.Main", new HTMLEditorField("ThankYouText", "Text on Submission")); 

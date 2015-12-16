@@ -11,7 +11,7 @@
 					<% if Name %>
 						<h2>$Name</h2>					
 					<% end_if %>
-					<div class="paypal_item_price" id="showprice_form$ID">$ $Price</div>
+					<div class="paypal_item_price" id="showprice_form$ID">$ <% if PaypalItemOptions %>$PaypalItemOptions.First.Price<% else %>$Price<% end_if %></div>
 					$Description
 					
 					<form target="_self" action="$PaypalStorePage.PaypalUrl" method="post" style="margin-top: 10px;" id="form$ID">
