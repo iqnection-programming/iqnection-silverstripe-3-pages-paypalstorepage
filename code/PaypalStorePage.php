@@ -188,19 +188,22 @@
 			$fields->push( new TextAreaField("Description", "Description of Item") );
 			$UploadField->setAllowedExtensions(array('jpg','jpeg','png','gif'));
 			
-			if (!$this->ID) $fields->push( new HeaderField('note1','You must first save this product before adding options.'));
-			$PaypalItemOptions_config = GridFieldConfig::create()->addComponents(
-				new GridFieldSortableRows('SortOrder'),
-				new GridFieldToolbarHeader(),
-				($this->ID)?new GridFieldAddNewButton('toolbar-header-right'):null,
-				new GridFieldSortableHeader(),
-				new GridFieldDataColumns(),
-				new GridFieldPaginator(10),
-				new GridFieldEditButton(),
-				new GridFieldDeleteAction(),
-				new GridFieldDetailForm()				
-			);
-			$fields->push( new GridField('PaypalItemOptions','Paypal Item Options',$this->PaypalItemOptions(),$PaypalItemOptions_config));
+			if (!$this->ID){ 
+				$fields->push( new HeaderField('note1','You must first save this product before adding options.'));
+			} else {
+				$PaypalItemOptions_config = GridFieldConfig::create()->addComponents(
+					new GridFieldSortableRows('SortOrder'),
+					new GridFieldToolbarHeader(),
+					new GridFieldAddNewButton('toolbar-header-right'),
+					new GridFieldSortableHeader(),
+					new GridFieldDataColumns(),
+					new GridFieldPaginator(10),
+					new GridFieldEditButton(),
+					new GridFieldDeleteAction(),
+					new GridFieldDetailForm()				
+				);
+				$fields->push( new GridField('PaypalItemOptions','Paypal Item Options',$this->PaypalItemOptions(),$PaypalItemOptions_config));
+			}
 			
 			$this->extend('updateCMSFields',$fields);
 			

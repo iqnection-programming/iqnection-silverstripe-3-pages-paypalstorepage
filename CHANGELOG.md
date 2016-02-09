@@ -1,6 +1,9 @@
 ## Package: iqnection-silverstripe-3-pages-paypalstorepage
 # Change Log
 
+## [1.1.1]
+- Fixed GridField error
+
 ## [1.1.0]
 - Updated for SilverStripe 3.2
 - Stable build
